@@ -120,12 +120,38 @@ export function getAlarmToneDataUrl() {
   return cachedAlarmTone;
 }
 
+function isTauriRuntime() {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+async function sendTauriNotification(title: string, body: string): Promise<boolean> {
+  try {
+    const mod = await import('@tauri-apps/plugin-notification');
+    let granted = await mod.isPermissionGranted();
+    if (!granted) {
+      const permission = await mod.requestPermission();
+      granted = permission === 'granted';
+    }
+    if (!granted) {
+      return false;
+    }
+    mod.sendNotification({ title, body });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function notifySessionFinished(title: string, body: string) {
-  if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+  if (typeof window === 'undefined') {
     return;
   }
 
-  if (Notification.permission !== 'granted') {
+  if (isTauriRuntime() && (await sendTauriNotification(title, body))) {
+    return;
+  }
+
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
     return;
   }
 

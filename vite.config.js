@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
+var isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
 export default defineConfig({
     plugins: [
         react(),
@@ -36,7 +37,7 @@ export default defineConfig({
                 globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
             },
             devOptions: {
-                enabled: true,
+                enabled: !isTauriBuild,
             },
         }),
     ],
