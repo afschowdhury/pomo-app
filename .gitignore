@@ -1,0 +1,14 @@
+node_modules
+dist
+dev-dist
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!.env.example
+.vscode/*
+!.vscode/extensions.json
+.idea
+src-tauri/target
+src-tauri/Cargo.lock
+src-tauri/gen
