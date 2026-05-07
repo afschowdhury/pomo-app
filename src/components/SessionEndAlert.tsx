@@ -34,7 +34,7 @@ export function SessionEndAlert({ open, phaseLabel, message, onSnooze, onStop }:
             <Volume2 size={16} />
             Alarm is active until you snooze or stop it.
           </div>
-          <p className="mt-2">If browser notifications are allowed, a persistent system notification is also shown.</p>
+          <p className="mt-2">If system notifications are allowed, a persistent macOS notification is also shown.</p>
         </div>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">

@@ -82,7 +82,7 @@ export function useSessionAlarm() {
     try {
       await audioRef.current.play();
     } catch {
-      // Browsers may block autoplay until the user returns to the tab.
+      // The webview may defer playback until the window is foregrounded.
     }
   };
 

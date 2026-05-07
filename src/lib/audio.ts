@@ -120,8 +120,63 @@ export function getAlarmToneDataUrl() {
   return cachedAlarmTone;
 }
 
-function isTauriRuntime() {
+export function isTauriRuntime() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+function isNotificationPermission(value: string): value is NotificationPermission {
+  return value === 'granted' || value === 'denied' || value === 'default';
+}
+
+export async function requestNotificationPermissionForRuntime(): Promise<NotificationPermission | 'unsupported'> {
+  if (typeof window === 'undefined') {
+    return 'unsupported';
+  }
+
+  if (isTauriRuntime()) {
+    try {
+      const mod = await import('@tauri-apps/plugin-notification');
+      let granted = await mod.isPermissionGranted();
+      if (!granted) {
+        const permission = await mod.requestPermission();
+        if (isNotificationPermission(permission)) {
+          return permission;
+        }
+        granted = permission === 'granted';
+      }
+      return granted ? 'granted' : 'denied';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
+  if (typeof Notification === 'undefined') {
+    return 'unsupported';
+  }
+
+  return Notification.requestPermission();
+}
+
+export async function getNotificationPermissionForRuntime(): Promise<NotificationPermission | 'unsupported'> {
+  if (typeof window === 'undefined') {
+    return 'unsupported';
+  }
+
+  if (isTauriRuntime()) {
+    try {
+      const mod = await import('@tauri-apps/plugin-notification');
+      const granted = await mod.isPermissionGranted();
+      return granted ? 'granted' : 'default';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
+  if (typeof Notification === 'undefined') {
+    return 'unsupported';
+  }
+
+  return Notification.permission;
 }
 
 async function sendTauriNotification(title: string, body: string): Promise<boolean> {
@@ -172,4 +227,11 @@ export async function notifySessionFinished(title: string, body: string) {
   }
 
   new Notification(title, options);
+}
+
+export async function sendTestNotification() {
+  await notifySessionFinished(
+    'Notifications are working',
+    'You will get a system notification like this when a session ends.',
+  );
 }

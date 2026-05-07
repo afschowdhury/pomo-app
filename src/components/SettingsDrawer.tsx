@@ -8,6 +8,7 @@ interface SettingsDrawerProps {
   onClose: () => void;
   onUpdateSettings: (patch: Partial<PomodoroSettings>) => void;
   onRequestNotifications: () => void;
+  onSendTestNotification: () => void;
 }
 
 const numberFields: Array<{
@@ -31,6 +32,7 @@ export function SettingsDrawer({
   onClose,
   onUpdateSettings,
   onRequestNotifications,
+  onSendTestNotification,
 }: SettingsDrawerProps) {
   return (
     <Drawer open={open} title="Settings" onClose={onClose}>
@@ -115,20 +117,33 @@ export function SettingsDrawer({
             <div className="rounded-2xl border border-ink/10 bg-[#fffaf3] px-4 py-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-medium text-ink">Browser notifications</p>
+                  <p className="font-medium text-ink">macOS notifications</p>
                   <p className="text-sm text-dusk/75">
                     Permission status: <span className="capitalize">{settings.notificationPermission}</span>
                   </p>
                   <p className="mt-1 text-sm text-dusk/75">
-                    Grant access so the session-finished alert stays visible even when the tab is hidden or minimized.
+                    Grant access so the session-finished alert stays visible even when Still Pomodoro is in the
+                    background or behind another window.
                   </p>
                 </div>
                 <button
                   className="rounded-full bg-ink px-4 py-2 text-sm text-canvas transition hover:bg-pine"
                   onClick={onRequestNotifications}
-                  disabled={settings.notificationPermission === 'unsupported'}
+                  disabled={
+                    settings.notificationPermission === 'unsupported' ||
+                    settings.notificationPermission === 'granted'
+                  }
                 >
                   Request access
+                </button>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm text-dusk transition hover:border-blush/40 hover:text-blush"
+                  onClick={onSendTestNotification}
+                  disabled={settings.notificationPermission !== 'granted'}
+                >
+                  Send test notification
                 </button>
               </div>
             </div>

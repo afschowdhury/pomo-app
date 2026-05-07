@@ -6,9 +6,11 @@ import { SettingsDrawer } from '@/components/SettingsDrawer';
 import { StatsDrawer } from '@/components/StatsDrawer';
 import { TaskPanel } from '@/components/TaskPanel';
 import { TimerCard } from '@/components/TimerCard';
+import { requestNotificationPermissionForRuntime, sendTestNotification } from '@/lib/audio';
 import { getPhaseDurationMs, phaseLabels, resolveProgress } from '@/lib/pomodoro';
 import { getCurrentStreak, getTodaySummary, getWeeklyFocus } from '@/lib/stats';
 import { useHydrateApp } from '@/hooks/useHydrateApp';
+import { useAmbientAudio } from '@/hooks/useAmbientAudio';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useSessionAlarm } from '@/hooks/useSessionAlarm';
 import { useTimerEngine } from '@/hooks/useTimerEngine';
@@ -24,6 +26,8 @@ export default function App() {
   const timer = useAppStore((state) => state.timer);
   const tasks = useAppStore((state) => state.tasks);
   const sessions = useAppStore((state) => state.sessions);
+  const audioSources = useAppStore((state) => state.audioSources);
+  const audioStatus = useAppStore((state) => state.audioStatus);
   const isSettingsOpen = useAppStore((state) => state.isSettingsOpen);
   const isStatsOpen = useAppStore((state) => state.isStatsOpen);
   const isFocusMode = useAppStore((state) => state.isFocusMode);
@@ -46,6 +50,11 @@ export default function App() {
   const removeTask = useAppStore((state) => state.removeTask);
   const moveTask = useAppStore((state) => state.moveTask);
   const { alertState, snooze, stop } = useSessionAlarm();
+  const { currentSource, activateSource, togglePlay, toggleMute, setVolume, setDucked } = useAmbientAudio();
+  const ambientSources = useMemo(
+    () => audioSources.filter((source) => source.stationKey === 'ambient'),
+    [audioSources],
+  );
 
   const currentTask = tasks.find((task) => task.status === 'active') ?? null;
   const todaySummary = useMemo(
@@ -82,13 +91,12 @@ export default function App() {
     }
   }, [hydrated, isFocusMode]);
 
-  const requestNotifications = async () => {
-    if (typeof Notification === 'undefined') {
-      await setNotificationPermission('unsupported');
-      return;
-    }
+  useEffect(() => {
+    setDucked(Boolean(alertState));
+  }, [alertState, setDucked]);
 
-    const permission = await Notification.requestPermission();
+  const requestNotifications = async () => {
+    const permission = await requestNotificationPermissionForRuntime();
     await setNotificationPermission(permission);
   };
 
@@ -121,8 +129,8 @@ export default function App() {
                       A refined focus room with modern pomodoro flow and unmistakable session alerts.
                     </h1>
                     <p className="mt-4 max-w-2xl text-base text-dusk/85">
-                      Timer, tasks, streaks, PWA-ready persistence, and a session-finished alarm you must snooze or
-                      stop yourself.
+                      Timer, tasks, streaks, local-first persistence, and a session-finished alarm you must snooze
+                      or stop yourself.
                     </p>
                   </div>
 
@@ -190,6 +198,17 @@ export default function App() {
                     onReset={() => void resetTimer()}
                     onSkip={() => void skipTimer()}
                     onPhaseSelect={(phase) => void jumpToPhase(phase)}
+                    ambient={{
+                      sources: ambientSources,
+                      currentSource,
+                      audioStatus,
+                      volume: settings.ambientVolume,
+                      muted: settings.ambientMuted,
+                      onActivateSource: (source) => void activateSource(source),
+                      onTogglePlay: () => void togglePlay(),
+                      onToggleMute: () => void toggleMute(),
+                      onSetVolume: (volume) => void setVolume(volume),
+                    }}
                   />
 
                   <TaskPanel
@@ -219,6 +238,17 @@ export default function App() {
                   onReset={() => void resetTimer()}
                   onSkip={() => void skipTimer()}
                   onPhaseSelect={(phase) => void jumpToPhase(phase)}
+                  ambient={{
+                    sources: ambientSources,
+                    currentSource,
+                    audioStatus,
+                    volume: settings.ambientVolume,
+                    muted: settings.ambientMuted,
+                    onActivateSource: (source) => void activateSource(source),
+                    onTogglePlay: () => void togglePlay(),
+                    onToggleMute: () => void toggleMute(),
+                    onSetVolume: (volume) => void setVolume(volume),
+                  }}
                 />
               </section>
             )}
@@ -232,6 +262,7 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onUpdateSettings={(patch) => void updateSettings(patch)}
         onRequestNotifications={() => void requestNotifications()}
+        onSendTestNotification={() => void sendTestNotification()}
       />
       <StatsDrawer
         open={isStatsOpen}

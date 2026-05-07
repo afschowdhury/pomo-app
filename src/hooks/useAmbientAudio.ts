@@ -7,6 +7,10 @@ function isM3u8(url: string) {
   return url.toLowerCase().includes('.m3u8');
 }
 
+function isRemoteStream(url: string) {
+  return /^https?:\/\//i.test(url);
+}
+
 export function useAmbientAudio() {
   const audioSources = useAppStore((state) => state.audioSources);
   const selectedAudioSourceId = useAppStore((state) => state.selectedAudioSourceId);
@@ -19,6 +23,15 @@ export function useAmbientAudio() {
   );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<{ destroy: () => void } | null>(null);
+  const duckedRef = useRef(false);
+
+  const applyVolume = useCallback(
+    (audio: HTMLAudioElement) => {
+      const duckMultiplier = duckedRef.current ? 0.2 : 1;
+      audio.volume = settings.ambientMuted ? 0 : settings.ambientVolume * duckMultiplier;
+    },
+    [settings.ambientMuted, settings.ambientVolume],
+  );
 
   const cleanupInlineAudio = useCallback(() => {
     if (hlsRef.current) {
@@ -37,10 +50,11 @@ export function useAmbientAudio() {
     if (!audioRef.current) {
       audioRef.current = new Audio();
       audioRef.current.preload = 'none';
+      audioRef.current.loop = true;
     }
 
-    audioRef.current.volume = settings.ambientMuted ? 0 : settings.ambientVolume;
-  }, [settings.ambientMuted, settings.ambientVolume]);
+    applyVolume(audioRef.current);
+  }, [applyVolume]);
 
   useEffect(() => cleanupInlineAudio, [cleanupInlineAudio]);
 
@@ -53,7 +67,13 @@ export function useAmbientAudio() {
     async (source: AudioSource) => {
       await setSelectedAudioSourceId(source.id);
 
-      if (typeof navigator !== 'undefined' && !navigator.onLine && source.kind !== 'notification_sound') {
+      if (
+        typeof navigator !== 'undefined' &&
+        !navigator.onLine &&
+        source.kind === 'direct_stream' &&
+        source.streamUrl !== null &&
+        isRemoteStream(source.streamUrl)
+      ) {
         cleanupInlineAudio();
         setAudioStatus('unavailable_offline', 'This source needs a connection.');
         return;
@@ -119,6 +139,28 @@ export function useAmbientAudio() {
     await useAppStore.getState().updateSettings({ ambientVolume: volume });
   }, []);
 
+  const setDucked = useCallback(
+    (ducked: boolean) => {
+      duckedRef.current = ducked;
+      if (audioRef.current) {
+        applyVolume(audioRef.current);
+      }
+    },
+    [applyVolume],
+  );
+
+  const togglePlay = useCallback(async () => {
+    const selectedSource = currentSource;
+    const state = useAppStore.getState();
+    if (state.audioStatus === 'playing_in_app' && selectedSource) {
+      stopPlayback();
+      return;
+    }
+    if (selectedSource) {
+      await activateSource(selectedSource);
+    }
+  }, [activateSource, currentSource, stopPlayback]);
+
   return {
     currentSource,
     embedSource:
@@ -126,6 +168,8 @@ export function useAmbientAudio() {
         ? currentSource
         : null,
     activateSource,
+    togglePlay,
+    setDucked,
     stopPlayback,
     toggleMute,
     setVolume,

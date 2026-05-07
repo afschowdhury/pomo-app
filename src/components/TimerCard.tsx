@@ -1,8 +1,9 @@
 import { Pause, Play, RotateCcw, SkipForward } from 'lucide-react';
+import { AmbientStrip } from '@/components/AmbientStrip';
 import { Surface } from '@/components/Surface';
 import { cn } from '@/lib/utils';
 import { formatDuration, phaseLabels } from '@/lib/pomodoro';
-import type { PomodoroPhase, TimerState } from '@/types/domain';
+import type { AudioPlaybackStatus, AudioSource, PomodoroPhase, TimerState } from '@/types/domain';
 
 interface TimerCardProps {
   timer: TimerState;
@@ -14,6 +15,17 @@ interface TimerCardProps {
   onReset: () => void;
   onSkip: () => void;
   onPhaseSelect: (phase: PomodoroPhase) => void;
+  ambient: {
+    sources: AudioSource[];
+    currentSource: AudioSource | null;
+    audioStatus: AudioPlaybackStatus;
+    volume: number;
+    muted: boolean;
+    onActivateSource: (source: AudioSource) => void;
+    onTogglePlay: () => void;
+    onToggleMute: () => void;
+    onSetVolume: (volume: number) => void;
+  };
 }
 
 export function TimerCard({
@@ -26,6 +38,7 @@ export function TimerCard({
   onReset,
   onSkip,
   onPhaseSelect,
+  ambient,
 }: TimerCardProps) {
   const phases: PomodoroPhase[] = ['work', 'short_break', 'long_break'];
 
@@ -74,6 +87,18 @@ export function TimerCard({
             <span>Cycle {timer.cycleIndex + 1}</span>
           </div>
         </div>
+
+        <AmbientStrip
+          sources={ambient.sources}
+          currentSource={ambient.currentSource}
+          audioStatus={ambient.audioStatus}
+          volume={ambient.volume}
+          muted={ambient.muted}
+          onActivateSource={ambient.onActivateSource}
+          onTogglePlay={ambient.onTogglePlay}
+          onToggleMute={ambient.onToggleMute}
+          onSetVolume={ambient.onSetVolume}
+        />
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <button

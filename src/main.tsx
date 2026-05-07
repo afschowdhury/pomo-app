@@ -4,7 +4,9 @@ import { registerSW } from 'virtual:pwa-register';
 import App from '@/App';
 import '@/index.css';
 
-registerSW({ immediate: true });
+if (!('__TAURI_INTERNALS__' in window)) {
+  registerSW({ immediate: true });
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
