@@ -19,7 +19,12 @@ import type {
   TaskSubtask,
   TimerState,
 } from '@/types/domain';
+import { cancelSessionAlarmRust, scheduleSessionAlarmRust } from '@/lib/tauriSessionAlarm';
 import { clamp, generateId } from '@/lib/utils';
+
+/** Dedupe concurrent natural-expiry completions (Rust alarm + JS interval). */
+let lastCompletedNaturalEndsAt: number | null = null;
+let naturalExpiryInFlight = false;
 
 interface AppStore {
   hydrated: boolean;
@@ -215,18 +220,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await db.tasks.bulkPut(normalizedTasks);
     }
 
+    const hydratedTimer = {
+      ...timer,
+      remainingMs: resolveRemainingMs(timer, Date.now()),
+    };
+
     set({
       hydrated: true,
       settings,
-      timer: {
-        ...timer,
-        remainingMs: resolveRemainingMs(timer, Date.now()),
-      },
+      timer: hydratedTimer,
       tasks: sortTasks(normalizedTasks),
       sessions,
       audioSources: mergedAudioSources,
       selectedAudioSourceId: settings.defaultAudioSourceId ?? mergedAudioSources[0]?.id ?? null,
     });
+
+    if (hydratedTimer.isRunning && hydratedTimer.endsAt !== null) {
+      await scheduleSessionAlarmRust(Math.max(0, hydratedTimer.endsAt - Date.now()));
+    }
   },
 
   setSettingsOpen(open) {
@@ -588,9 +599,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     set({ timer: nextTimer });
     await persistTimer(nextTimer);
+    await scheduleSessionAlarmRust(Math.max(0, nextTimer.endsAt! - now));
   },
 
   async pauseTimer(now = Date.now()) {
+    await cancelSessionAlarmRust();
+
     const timer = get().timer;
     if (!timer.isRunning) {
       return;
@@ -608,6 +622,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   async resetTimer(now = Date.now()) {
+    await cancelSessionAlarmRust();
+
     const { timer, settings } = get();
     let sessions = get().sessions;
 
@@ -634,6 +650,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   async jumpToPhase(phase) {
+    await cancelSessionAlarmRust();
+
     const { timer, settings } = get();
     const nextTimer = buildTimerForPhase(phase, settings, {
       cycleIndex: timer.cycleIndex,
@@ -649,68 +667,105 @@ export const useAppStore = create<AppStore>((set, get) => ({
     { completed = true, interruptionReason }: { completed?: boolean; interruptionReason?: SessionRecord['interruptionReason'] } = {},
   ) {
     const { timer, settings, tasks } = get();
-    let nextTasks = tasks;
-    let nextSessions = get().sessions;
+    const isNaturalExpiry =
+      timer.isRunning &&
+      timer.endsAt !== null &&
+      timer.endsAt <= now &&
+      interruptionReason === undefined;
 
-    if (hasMeaningfulProgress(timer, settings, now)) {
-      const session = createSessionRecord(timer, settings, now, completed, interruptionReason);
-      nextSessions = [session, ...nextSessions];
-      await db.sessions.put(session);
+    const capturedNaturalEndsAt = isNaturalExpiry ? timer.endsAt : null;
+
+    if (isNaturalExpiry) {
+      if (lastCompletedNaturalEndsAt === timer.endsAt) {
+        return;
+      }
+      if (naturalExpiryInFlight) {
+        return;
+      }
+      naturalExpiryInFlight = true;
     }
 
-    if (timer.phase === 'work' && completed && timer.activeTaskId) {
-      nextTasks = sortTasks(
-        tasks.map((task) => {
-          if (task.id !== timer.activeTaskId) {
-            return task;
-          }
+    await cancelSessionAlarmRust();
 
-          const completedPomodoros = task.completedPomodoros + 1;
-          const shouldComplete = completedPomodoros >= task.estimatePomodoros;
+    let nextNormalizedTimer: TimerState | null = null;
 
-          return {
-            ...task,
-            completedPomodoros,
-            status: shouldComplete ? ('completed' as const) : task.status,
-            updatedAt: now,
-          };
-        }),
-      );
+    try {
+      let nextTasks = tasks;
+      let nextSessions = get().sessions;
 
-      if (nextTasks.some((task) => task.id === timer.activeTaskId && task.status === 'completed')) {
-        const nextActiveTask = chooseNextActiveTask(nextTasks);
+      if (hasMeaningfulProgress(timer, settings, now)) {
+        const session = createSessionRecord(timer, settings, now, completed, interruptionReason);
+        nextSessions = [session, ...nextSessions];
+        await db.sessions.put(session);
+      }
+
+      if (timer.phase === 'work' && completed && timer.activeTaskId) {
         nextTasks = sortTasks(
-          nextTasks.map((task) => {
-            if (task.status === 'completed') {
+          tasks.map((task) => {
+            if (task.id !== timer.activeTaskId) {
               return task;
             }
 
-            if (nextActiveTask && task.id === nextActiveTask.id) {
-              return { ...task, status: 'active', updatedAt: now };
-            }
+            const completedPomodoros = task.completedPomodoros + 1;
+            const shouldComplete = completedPomodoros >= task.estimatePomodoros;
 
-            return { ...task, status: 'queued', updatedAt: now };
+            return {
+              ...task,
+              completedPomodoros,
+              status: shouldComplete ? ('completed' as const) : task.status,
+              updatedAt: now,
+            };
           }),
         );
+
+        if (nextTasks.some((task) => task.id === timer.activeTaskId && task.status === 'completed')) {
+          const nextActiveTask = chooseNextActiveTask(nextTasks);
+          nextTasks = sortTasks(
+            nextTasks.map((task) => {
+              if (task.status === 'completed') {
+                return task;
+              }
+
+              if (nextActiveTask && task.id === nextActiveTask.id) {
+                return { ...task, status: 'active', updatedAt: now };
+              }
+
+              return { ...task, status: 'queued', updatedAt: now };
+            }),
+          );
+        }
+      }
+
+      const { nextTimer } = getTransitionTarget(timer, settings, now, completed);
+      const activeTask =
+        nextTasks.find((task) => task.status === 'active') ??
+        nextTasks.find((task) => task.status === 'queued') ??
+        null;
+      const normalizedTimer = {
+        ...nextTimer,
+        activeTaskId: activeTask?.id ?? null,
+      };
+
+      set({
+        timer: normalizedTimer,
+        tasks: nextTasks,
+        sessions: nextSessions,
+      });
+
+      await Promise.all([persistTimer(normalizedTimer), db.tasks.bulkPut(nextTasks)]);
+      nextNormalizedTimer = normalizedTimer;
+    } finally {
+      if (isNaturalExpiry) {
+        naturalExpiryInFlight = false;
       }
     }
 
-    const { nextTimer } = getTransitionTarget(timer, settings, now, completed);
-    const activeTask =
-      nextTasks.find((task) => task.status === 'active') ??
-      nextTasks.find((task) => task.status === 'queued') ??
-      null;
-    const normalizedTimer = {
-      ...nextTimer,
-      activeTaskId: activeTask?.id ?? null,
-    };
+    if (isNaturalExpiry && capturedNaturalEndsAt !== null) {
+      lastCompletedNaturalEndsAt = capturedNaturalEndsAt;
+    }
 
-    set({
-      timer: normalizedTimer,
-      tasks: nextTasks,
-      sessions: nextSessions,
-    });
-
-    await Promise.all([persistTimer(normalizedTimer), db.tasks.bulkPut(nextTasks)]);
+    if (nextNormalizedTimer?.isRunning && nextNormalizedTimer.endsAt !== null) {
+      await scheduleSessionAlarmRust(Math.max(0, nextNormalizedTimer.endsAt - Date.now()));
+    }
   },
 }));

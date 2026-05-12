@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { getAlarmToneDataUrl, notifySessionFinished } from '@/lib/audio';
-import { phaseLabels } from '@/lib/pomodoro';
-import type { PomodoroPhase, TimerState } from '@/types/domain';
+import { getAlarmToneDataUrl, isTauriRuntime, notifySessionFinished } from '@/lib/audio';
+import { phaseLabels, resolveRemainingMs } from '@/lib/pomodoro';
+import { forceFocusWindowRust } from '@/lib/tauriSessionAlarm';
+import type { PomodoroPhase } from '@/types/domain';
 import { useAppStore } from '@/store/useAppStore';
 
 const SNOOZE_MS = 5 * 60_000;
@@ -20,24 +21,19 @@ function getAlarmCopy(phase: PomodoroPhase) {
   };
 }
 
-function wasNaturalCompletion(previousTimer: TimerState, now: number) {
-  return (
-    previousTimer.isRunning &&
-    previousTimer.endsAt !== null &&
-    previousTimer.endsAt <= now + 1_500
-  );
-}
+type TauriRestoreState = { wasFullscreen: boolean };
 
 export function useSessionAlarm() {
   const hydrated = useAppStore((state) => state.hydrated);
-  const timer = useAppStore((state) => state.timer);
+  const sessions = useAppStore((state) => state.sessions);
   const soundEnabled = useAppStore((state) => state.settings.soundEnabled);
   const [alertState, setAlertState] = useState<null | { phase: PomodoroPhase; body: string }>(null);
-  const previousTimerRef = useRef(timer);
+  const lastAlertedSessionIdRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const snoozeTimeoutRef = useRef<number | null>(null);
   const titleIntervalRef = useRef<number | null>(null);
   const originalTitleRef = useRef<string>('');
+  const tauriRestoreRef = useRef<TauriRestoreState | null>(null);
 
   const stopAlarm = () => {
     if (audioRef.current) {
@@ -52,8 +48,54 @@ export function useSessionAlarm() {
     }
   };
 
+  const releaseFullscreenTakeover = async () => {
+    if (!isTauriRuntime()) {
+      tauriRestoreRef.current = null;
+      return;
+    }
+
+    const restore = tauriRestoreRef.current;
+    tauriRestoreRef.current = null;
+    if (!restore) {
+      return;
+    }
+
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      await appWindow.setAlwaysOnTop(false);
+      await appWindow.setFullscreen(restore.wasFullscreen);
+      void appWindow.requestUserAttention(null).catch(() => undefined);
+    } catch (error) {
+      console.error('[session-alarm] releaseFullscreenTakeover failed', error);
+    }
+  };
+
+  const forceFullscreenTakeover = async () => {
+    try {
+      window.focus();
+    } catch {
+      // Ignore if runtime blocks direct focus.
+    }
+
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      const wasFullscreen = await appWindow.isFullscreen().catch(() => false);
+      tauriRestoreRef.current = { wasFullscreen };
+      await forceFocusWindowRust();
+    } catch (error) {
+      console.error('[session-alarm] forceFullscreenTakeover failed', error);
+    }
+  };
+
   const startAlarm = async (phase: PomodoroPhase, body: string) => {
     setAlertState({ phase, body });
+    await forceFullscreenTakeover();
 
     if (typeof document !== 'undefined' && titleIntervalRef.current === null) {
       originalTitleRef.current = document.title;
@@ -87,27 +129,51 @@ export function useSessionAlarm() {
   };
 
   useEffect(() => {
-    if (!hydrated) {
-      previousTimerRef.current = timer;
+    if (!hydrated || !isTauriRuntime()) {
       return;
     }
 
-    const previousTimer = previousTimerRef.current;
-    const phaseChanged = previousTimer.phase !== timer.phase;
-    const now = Date.now();
+    let unlisten: (() => void) | undefined;
 
-    if (phaseChanged && wasNaturalCompletion(previousTimer, now)) {
-      if (snoozeTimeoutRef.current !== null) {
-        window.clearTimeout(snoozeTimeoutRef.current);
-        snoozeTimeoutRef.current = null;
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen('session-alarm-fired', () => {
+          const { timer, completeCurrentPhase } = useAppStore.getState();
+          if (!timer.isRunning || timer.endsAt === null || resolveRemainingMs(timer, Date.now()) > 0) {
+            return;
+          }
+          void completeCurrentPhase();
+        });
+      } catch (error) {
+        console.error('[session-alarm] listen session-alarm-fired failed', error);
       }
+    })();
 
-      const { body } = getAlarmCopy(previousTimer.phase);
-      void startAlarm(previousTimer.phase, body);
+    return () => {
+      unlisten?.();
+    };
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
     }
 
-    previousTimerRef.current = timer;
-  }, [hydrated, soundEnabled, timer]);
+    const latestSession = sessions[0];
+    if (!latestSession?.completed || latestSession.id === lastAlertedSessionIdRef.current) {
+      return;
+    }
+
+    lastAlertedSessionIdRef.current = latestSession.id;
+    if (snoozeTimeoutRef.current !== null) {
+      window.clearTimeout(snoozeTimeoutRef.current);
+      snoozeTimeoutRef.current = null;
+    }
+
+    const { body } = getAlarmCopy(latestSession.phase);
+    void startAlarm(latestSession.phase, body);
+  }, [hydrated, sessions]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -127,15 +193,23 @@ export function useSessionAlarm() {
     };
   }, [alertState, soundEnabled]);
 
-  useEffect(() => () => {
-    stopAlarm();
-    if (snoozeTimeoutRef.current !== null) {
-      window.clearTimeout(snoozeTimeoutRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      stopAlarm();
+      if (snoozeTimeoutRef.current !== null) {
+        window.clearTimeout(snoozeTimeoutRef.current);
+      }
+      void releaseFullscreenTakeover();
+    },
+    [],
+  );
 
   return {
     alertState,
+    test: () => {
+      const { body } = getAlarmCopy('work');
+      void startAlarm('work', `Test alert. ${body}`);
+    },
     stop: () => {
       if (snoozeTimeoutRef.current !== null) {
         window.clearTimeout(snoozeTimeoutRef.current);
@@ -143,6 +217,7 @@ export function useSessionAlarm() {
       }
       stopAlarm();
       setAlertState(null);
+      void releaseFullscreenTakeover();
     },
     snooze: () => {
       const currentAlert = alertState;
@@ -152,6 +227,7 @@ export function useSessionAlarm() {
 
       stopAlarm();
       setAlertState(null);
+      void releaseFullscreenTakeover();
 
       if (snoozeTimeoutRef.current !== null) {
         window.clearTimeout(snoozeTimeoutRef.current);

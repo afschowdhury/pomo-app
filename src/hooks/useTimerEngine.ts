@@ -11,31 +11,64 @@ export function useTimerEngine() {
   const completeCurrentPhase = useAppStore((state) => state.completeCurrentPhase);
   const previousPhaseRef = useRef(timer.phase);
   const previousRunningRef = useRef(timer.isRunning);
+  /** Avoid duplicate `completeCurrentPhase` calls when interval and focus handler race. */
+  const firedForEndsAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    firedForEndsAtRef.current = null;
+  }, [timer.endsAt, timer.isRunning, timer.phase]);
 
   useEffect(() => {
     if (!hydrated) {
       return;
     }
 
-    const intervalId = window.setInterval(() => {
-      void syncTimer();
-    }, 1000);
+    const tryCompleteExpiredPhase = () => {
+      const { timer: live } = useAppStore.getState();
+      const now = Date.now();
+
+      if (!live.isRunning || live.endsAt === null) {
+        firedForEndsAtRef.current = null;
+        return;
+      }
+
+      if (live.endsAt > now) {
+        return;
+      }
+
+      if (firedForEndsAtRef.current === live.endsAt) {
+        return;
+      }
+
+      firedForEndsAtRef.current = live.endsAt;
+      void completeCurrentPhase();
+    };
+
+    const tick = () => {
+      void syncTimer().then(tryCompleteExpiredPhase);
+    };
+
+    const intervalId = window.setInterval(tick, 1000);
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void syncTimer();
+        void syncTimer().then(tryCompleteExpiredPhase);
       }
     };
 
+    const onFocus = () => {
+      void syncTimer().then(tryCompleteExpiredPhase);
+    };
+
     window.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('focus', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
 
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('focus', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
     };
-  }, [hydrated, syncTimer]);
+  }, [hydrated, syncTimer, completeCurrentPhase]);
 
   useEffect(() => {
     if (!hydrated || !timer.isRunning || timer.endsAt === null) {

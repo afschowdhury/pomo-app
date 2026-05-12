@@ -9,6 +9,7 @@ interface SettingsDrawerProps {
   onUpdateSettings: (patch: Partial<PomodoroSettings>) => void;
   onRequestNotifications: () => void;
   onSendTestNotification: () => void;
+  onTestAlarmPopup: () => void;
 }
 
 const numberFields: Array<{
@@ -33,6 +34,7 @@ export function SettingsDrawer({
   onUpdateSettings,
   onRequestNotifications,
   onSendTestNotification,
+  onTestAlarmPopup,
 }: SettingsDrawerProps) {
   return (
     <Drawer open={open} title="Settings" onClose={onClose}>
@@ -125,6 +127,10 @@ export function SettingsDrawer({
                     Grant access so the session-finished alert stays visible even when Still Pomodoro is in the
                     background or behind another window.
                   </p>
+                  <p className="mt-2 text-sm text-dusk/70">
+                    If no system prompt appears, open System Settings → Notifications → Still Pomodoro and enable
+                    alerts.
+                  </p>
                 </div>
                 <button
                   className="rounded-full bg-ink px-4 py-2 text-sm text-canvas transition hover:bg-pine"
@@ -139,11 +145,19 @@ export function SettingsDrawer({
               </div>
               <div className="mt-3 flex justify-end">
                 <button
-                  className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm text-dusk transition hover:border-blush/40 hover:text-blush"
+                  className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm text-dusk transition hover:border-blush/40 hover:text-blush disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={onSendTestNotification}
-                  disabled={settings.notificationPermission !== 'granted'}
+                  disabled={settings.notificationPermission === 'unsupported'}
                 >
                   Send test notification
+                </button>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm text-dusk transition hover:border-blush/40 hover:text-blush"
+                  onClick={onTestAlarmPopup}
+                >
+                  Test end-session popup
                 </button>
               </div>
             </div>

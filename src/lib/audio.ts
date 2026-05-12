@@ -145,7 +145,8 @@ export async function requestNotificationPermissionForRuntime(): Promise<Notific
         granted = permission === 'granted';
       }
       return granted ? 'granted' : 'denied';
-    } catch {
+    } catch (error) {
+      console.warn('[notifications] requestNotificationPermissionForRuntime failed', error);
       return 'unsupported';
     }
   }
@@ -167,7 +168,8 @@ export async function getNotificationPermissionForRuntime(): Promise<Notificatio
       const mod = await import('@tauri-apps/plugin-notification');
       const granted = await mod.isPermissionGranted();
       return granted ? 'granted' : 'default';
-    } catch {
+    } catch (error) {
+      console.warn('[notifications] getNotificationPermissionForRuntime failed', error);
       return 'unsupported';
     }
   }
@@ -192,7 +194,8 @@ async function sendTauriNotification(title: string, body: string): Promise<boole
     }
     mod.sendNotification({ title, body });
     return true;
-  } catch {
+  } catch (error) {
+    console.warn('[notifications] sendTauriNotification failed', error);
     return false;
   }
 }

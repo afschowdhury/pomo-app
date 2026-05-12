@@ -6,10 +6,15 @@ import { SettingsDrawer } from '@/components/SettingsDrawer';
 import { StatsDrawer } from '@/components/StatsDrawer';
 import { TaskPanel } from '@/components/TaskPanel';
 import { TimerCard } from '@/components/TimerCard';
-import { requestNotificationPermissionForRuntime, sendTestNotification } from '@/lib/audio';
+import {
+  getNotificationPermissionForRuntime,
+  requestNotificationPermissionForRuntime,
+  sendTestNotification,
+} from '@/lib/audio';
 import { getPhaseDurationMs, phaseLabels, resolveProgress } from '@/lib/pomodoro';
 import { getCurrentStreak, getTodaySummary, getWeeklyFocus } from '@/lib/stats';
 import { useHydrateApp } from '@/hooks/useHydrateApp';
+import { useMenuBarTimer } from '@/hooks/useMenuBarTimer';
 import { useAmbientAudio } from '@/hooks/useAmbientAudio';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useSessionAlarm } from '@/hooks/useSessionAlarm';
@@ -20,6 +25,7 @@ export default function App() {
   useHydrateApp();
   useTimerEngine();
   useKeyboardShortcuts();
+  useMenuBarTimer();
 
   const hydrated = useAppStore((state) => state.hydrated);
   const settings = useAppStore((state) => state.settings);
@@ -49,7 +55,7 @@ export default function App() {
   const completeTask = useAppStore((state) => state.completeTask);
   const removeTask = useAppStore((state) => state.removeTask);
   const moveTask = useAppStore((state) => state.moveTask);
-  const { alertState, snooze, stop } = useSessionAlarm();
+  const { alertState, test, snooze, stop } = useSessionAlarm();
   const { currentSource, activateSource, togglePlay, toggleMute, setVolume, setDucked } = useAmbientAudio();
   const ambientSources = useMemo(
     () => audioSources.filter((source) => source.stationKey === 'ambient'),
@@ -80,7 +86,7 @@ export default function App() {
   }, [isFocusMode, setFocusMode]);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || alertState) {
       return;
     }
 
@@ -89,15 +95,23 @@ export default function App() {
     } else if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
     }
-  }, [hydrated, isFocusMode]);
+  }, [hydrated, isFocusMode, alertState]);
 
   useEffect(() => {
     setDucked(Boolean(alertState));
   }, [alertState, setDucked]);
 
   const requestNotifications = async () => {
-    const permission = await requestNotificationPermissionForRuntime();
+    await requestNotificationPermissionForRuntime();
+    const permission = await getNotificationPermissionForRuntime();
     await setNotificationPermission(permission);
+  };
+
+  const sendTestNotifications = async () => {
+    await requestNotificationPermissionForRuntime();
+    const afterPerm = await getNotificationPermissionForRuntime();
+    await setNotificationPermission(afterPerm);
+    await sendTestNotification();
   };
 
   if (!hydrated) {
@@ -262,7 +276,8 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onUpdateSettings={(patch) => void updateSettings(patch)}
         onRequestNotifications={() => void requestNotifications()}
-        onSendTestNotification={() => void sendTestNotification()}
+        onSendTestNotification={() => void sendTestNotifications()}
+        onTestAlarmPopup={test}
       />
       <StatsDrawer
         open={isStatsOpen}
